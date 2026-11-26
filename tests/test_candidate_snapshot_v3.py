@@ -25,7 +25,7 @@ class CandidateSnapshotTests(unittest.IsolatedAsyncioTestCase):
         self.stack.enter_context(patch.object(evolution, "_skills_root", return_value=self.root / "skills"))
         self.path = self.root / "skills" / "demo" / "SKILL.md"
         self.path.parent.mkdir(parents=True)
-        self.path.write_text("---\nname: demo\ndescription: demo\nversion: 0.1.0\n---\nBASE instructions\n")
+        self.path.write_text("---\nname: demo\ndescription: demo\nversion: 0.1.0\n---\nBASE instructions\n", encoding="utf-8")
         skill = SimpleNamespace(name="demo", skill_dir=str(self.path.parent))
         self.stack.enter_context(patch("agents.skills.get_skill_by_name", side_effect=lambda name: skill if name == "demo" else None))
 
@@ -42,10 +42,10 @@ class CandidateSnapshotTests(unittest.IsolatedAsyncioTestCase):
         registry.parent.mkdir(parents=True, exist_ok=True)
         registry.write_text(json.dumps({"champions": {
             evaluation._lineage_id_for_skill("demo"): {"snapshot": snapshot},
-        }}))
+        }}), encoding="utf-8")
 
     def replace_proposal(self, candidate_id, proposal):
-        candidates._path(candidate_id).write_text(json.dumps(proposal))
+        candidates._path(candidate_id).write_text(json.dumps(proposal), encoding="utf-8")
 
     @staticmethod
     def approval_hash(proposal):
@@ -78,7 +78,7 @@ class CandidateSnapshotTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(evolution, "_today", side_effect=AssertionError("unexpected date lookup")):
             result = candidates.apply_candidate(candidate_id, expected_hash=approval_hash)
         self.assertTrue(result["ok"], result)
-        body = parse_frontmatter(self.path.read_text()).body
+        body = parse_frontmatter(self.path.read_text(encoding="utf-8")).body
         self.assertEqual(body, snapshot["instructions"])
         self.assertIn("2026-10-15", body)
         self.assertNotIn("2026-10-16", body)
@@ -95,7 +95,7 @@ class CandidateSnapshotTests(unittest.IsolatedAsyncioTestCase):
             snapshot = candidates.candidate_snapshot(proposal)
             applied = candidates.apply_candidate(result["candidate_id"], manual_review=True)
         self.assertTrue(applied["ok"], applied)
-        published = parse_frontmatter(Path(applied["file"]).read_text())
+        published = parse_frontmatter(Path(applied["file"]).read_text(encoding="utf-8"))
         self.assertEqual(published.body, snapshot["instructions"])
         self.assertEqual(published.body.count("## Creation Evidence"), 1)
         self.assertEqual(published.meta["allowed-tools"], "read_file")
@@ -122,7 +122,7 @@ class CandidateSnapshotTests(unittest.IsolatedAsyncioTestCase):
             accepted = candidates.apply_candidate(candidate_id, manual_review=True,
                                                   expected_hash=self.approval_hash(migrated))
         self.assertTrue(accepted["ok"], accepted)
-        self.assertEqual(parse_frontmatter(self.path.read_text()).body, migrated["snapshot"]["instructions"])
+        self.assertEqual(parse_frontmatter(self.path.read_text(encoding="utf-8")).body, migrated["snapshot"]["instructions"])
 
     def test_changed_body_parameters_or_date_are_rejected_even_with_manual_review(self):
         for mutation in ("body", "instructions", "date", "partial"):
@@ -160,7 +160,7 @@ class CandidateSnapshotTests(unittest.IsolatedAsyncioTestCase):
         candidate_id = self.stage()
         proposal = candidates.read_candidate(candidate_id)
         self.save_champion(candidates.candidate_snapshot(proposal))
-        self.path.write_text(self.path.read_text() + "External modification\n")
+        self.path.write_text(self.path.read_text(encoding="utf-8") + "External modification\n", encoding="utf-8")
         for manual in (False, True):
             result = candidates.apply_candidate(candidate_id, manual_review=manual)
             self.assertIn("active Skill changed", result["error"])

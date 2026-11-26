@@ -210,7 +210,7 @@ class RuntimeFixTests(unittest.IsolatedAsyncioTestCase):
                 root = Path(tmp)
                 skill_dir = root / 'skills' / 'demo'
                 skill_dir.mkdir(parents=True)
-                (skill_dir / 'SKILL.md').write_text('original skill')
+                (skill_dir / 'SKILL.md').write_text('original skill', encoding="utf-8")
                 stack.enter_context(patch('agents.skill_evolution.get_evolution_dir', return_value=root / 'evolution'))
                 stack.enter_context(patch('agents.skill_evolution._skills_root', return_value=root / 'skills'))
                 stack.enter_context(patch('agents.tools._check_permission_rules', return_value=rule))
@@ -226,8 +226,8 @@ class RuntimeFixTests(unittest.IsolatedAsyncioTestCase):
                 if pruned:
                     result = skill_evolution.restore_pruned_skill('demo')
                     self.assertTrue(result['ok'])
-                    self.assertEqual((skill_dir / 'SKILL.md').read_text(), 'original skill')
-                    stats = json.loads((root / 'evolution' / 'skill_usage_stats.json').read_text())
+                    self.assertEqual((skill_dir / 'SKILL.md').read_text(encoding="utf-8"), 'original skill')
+                    stats = json.loads((root / 'evolution' / 'skill_usage_stats.json').read_text(encoding="utf-8"))
                     self.assertFalse(stats['demo']['pruned'])
                     self.assertEqual(stats['demo']['retrieved'], 0)
 
@@ -299,31 +299,31 @@ class StateFixTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'example.txt'
             for text in ['a=“same”\nb=“same”\n', 'a=“same”\nb=″same″\n']:
-                path.write_text(text)
+                path.write_text(text, encoding="utf-8")
                 result = _edit_file({'file_path': str(path), 'old_string': '"same"', 'new_string': '"changed"'})
                 self.assertIn('Must be unique', result)
-                self.assertEqual(path.read_text(), text)
-            path.write_text('a=“same”\n')
+                self.assertEqual(path.read_text(encoding="utf-8"), text)
+            path.write_text('a=“same”\n', encoding="utf-8")
             self.assertIn('Successfully', _edit_file({'file_path': str(path), 'old_string': '"same"', 'new_string': '"changed"'}))
-            self.assertEqual(path.read_text(), 'a="changed"\n')
+            self.assertEqual(path.read_text(encoding="utf-8"), 'a="changed"\n')
 
     def test_failed_atomic_replace_preserves_original_and_cleans_temporary_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'state.json'
-            path.write_text('{"original":true}')
+            path.write_text('{"original":true}', encoding="utf-8")
             with patch('agents.storage.os.replace', side_effect=OSError('injected failure')):
                 with self.assertRaises(OSError):
                     atomic_write_text(path, '{"new":true}')
-            self.assertEqual(path.read_text(), '{"original":true}')
+            self.assertEqual(path.read_text(encoding="utf-8"), '{"original":true}')
             self.assertEqual(list(Path(tmp).iterdir()), [path])
 
     def test_corrupt_usage_stats_are_preserved(self):
         with tempfile.TemporaryDirectory() as tmp, patch('agents.skill_evolution.get_evolution_dir', return_value=Path(tmp)):
             path = Path(tmp) / 'skill_usage_stats.json'
-            path.write_text('{broken')
+            path.write_text('{broken', encoding="utf-8")
             with self.assertRaises(ValueError):
                 skill_evolution.record_skill_usage_judgments([{'name': 'demo', 'used': False, 'relevant': False}])
-            self.assertEqual(path.read_text(), '{broken')
+            self.assertEqual(path.read_text(encoding="utf-8"), '{broken')
 
     def test_multiprocess_usage_updates_do_not_lose_counts(self):
         script = '''import sys
@@ -339,7 +339,7 @@ for _ in range(15):
             for process in processes:
                 stdout, stderr = process.communicate(timeout=10)
                 self.assertEqual(process.returncode, 0, stderr.decode())
-            stats = json.loads((Path(tmp) / 'skill_usage_stats.json').read_text())
+            stats = json.loads((Path(tmp) / 'skill_usage_stats.json').read_text(encoding="utf-8"))
             self.assertEqual(stats['demo']['retrieved'], 60)
             self.assertEqual(stats['demo']['used'], 60)
 

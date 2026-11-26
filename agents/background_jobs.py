@@ -64,7 +64,7 @@ class BackgroundSkillTasks:
             if path.stem in self._background_job_ids:
                 continue
             try:
-                job = json.loads(path.read_text())
+                job = json.loads(path.read_text(encoding="utf-8"))
                 if not isinstance(job, dict):
                     raise ValueError("Invalid persisted Skill job")
                 # 获取尝试次数；字段不存在时默认是 0。
@@ -105,7 +105,7 @@ class BackgroundSkillTasks:
                 with state_lock(path):
                     # Re-read ownership after acquiring the cross-process claim.
                     # 重新读取磁盘上的最新任务记录
-                    latest = json.loads(path.read_text())
+                    latest = json.loads(path.read_text(encoding="utf-8"))
                     # 如果最新记录有持有进程，且最新所属会话与第一次读取时job持有的进程不同，
                     # 就认为任务在前后读取期间已被其他会话接管。
                     # 此时协程对象应该被关闭
@@ -139,7 +139,7 @@ class BackgroundSkillTasks:
             try:
                 # 如果是重启历史任务，那么原本的f"{job_id}.json"下面必然有历史信息
                 # 反之则返回一个空消息
-                previous = json.loads(path.read_text()) if path.exists() else {}
+                previous = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
                 record = {"data": job, "status": "queued", "attempts": previous.get("attempts", 0),
                           "owner_pid": os.getpid(), "owner_session": self.session_id}
                 # 在执行前更新信息,覆盖写

@@ -17,7 +17,7 @@ def load_recent_sources(path: Path, limit: int, *, persist: bool = True) -> list
     if not persist:
         # 创建一个字典 groups，当访问不存在的键时，会自动创建一个有最大长度限制的双端队列作为默认值。
         groups = defaultdict(lambda: deque(maxlen=limit))
-        with path.open() as stream:
+        with path.open(encoding="utf-8") as stream:
             for line in stream:
                 if not line.strip():
                     continue

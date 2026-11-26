@@ -13,8 +13,6 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-console = Console(highlight=False)
-
 # ─── Basic output ──────────────────────────────────────────
 
 
@@ -22,9 +20,32 @@ def _safe_text(value: object) -> str:
     return str(value).encode("utf-8", errors="replace").decode("utf-8")
 
 
+def _write_stdout(text: object) -> int:
+    """Preserve Unicode where supported, escaping characters a legacy stream cannot encode."""
+    stream = sys.stdout
+    rendered = _safe_text(text)
+    encoding = getattr(stream, "encoding", None)
+    if encoding:
+        rendered = rendered.encode(encoding, errors="backslashreplace").decode(encoding)
+    return stream.write(rendered)
+
+
 def _safe_stdout_write(text: object) -> None:
-    sys.stdout.write(_safe_text(text))
+    _write_stdout(text)
     sys.stdout.flush()
+
+
+class _SafeStdout:
+    """Keep Rich output encoding-safe while honoring redirected stdout."""
+
+    def write(self, text: str) -> int:
+        return _write_stdout(text)
+
+    def __getattr__(self, name):
+        return getattr(sys.stdout, name)
+
+
+console = Console(file=_SafeStdout(), highlight=False)
 
 
 # COOKIE_BEAR = r"""

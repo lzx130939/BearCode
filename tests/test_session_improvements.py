@@ -52,7 +52,7 @@ class SessionImprovementTests(unittest.TestCase):
             data = self.saved(sid, task)
             # Represent pre-title metadata, including identical timestamps.
             data["metadata"]["updatedAt"] = "2026-10-25T10:00:00Z"
-            (session.SESSION_DIR / f"{sid}.json").write_text(json.dumps(data))
+            (session.SESSION_DIR / f"{sid}.json").write_text(json.dumps(data), encoding="utf-8")
         before = {p: p.read_bytes() for p in session.SESSION_DIR.glob("*.json")}
         rows = self.dispatch("GET", "/api/sessions")
         self.assertEqual({row["id"]: row["title"] for row in rows}, tasks)
@@ -123,7 +123,7 @@ class SessionImprovementTests(unittest.TestCase):
         data = self.saved("plan", mode="plan")
         plan = self.root / ".bear/plans/original.md"
         plan.parent.mkdir(parents=True)
-        plan.write_text("the approved plan draft")
+        plan.write_text("the approved plan draft", encoding="utf-8")
         data["runtimeState"]["planFilePath"] = str(plan)
         session.save_session("plan", data)
         self.dispatch("GET", "/api/sessions/plan")
@@ -137,12 +137,12 @@ class SessionImprovementTests(unittest.TestCase):
     def test_conflicting_write_is_failed_and_never_listed_as_a_changed_file(self):
         view = self.new_view()
         path = self.root / "file.txt"
-        path.write_text("initial")
+        path.write_text("initial", encoding="utf-8")
         async def run():
             view.ensure_agent()
             view.agent.permission_mode = "acceptEdits"
             await view.agent._run_checked_tool("read_file", {"file_path": str(path)})
-            path.write_text("external edit")
+            path.write_text("external edit", encoding="utf-8")
             for name, args in (("write_file", {"content": "overwrite"}),
                                ("edit_file", {"old_string": "initial", "new_string": "new"})):
                 result = await view.agent._run_checked_tool(name, {"file_path": str(path), **args})
@@ -150,7 +150,7 @@ class SessionImprovementTests(unittest.TestCase):
                 self.assertEqual(view.entries[-1]["status"], "error")
                 self.assertTrue(view.agent._looks_like_tool_failure(name, result, ""))
             self.assertFalse(view.files)
-            self.assertEqual(path.read_text(), "external edit")
+            self.assertEqual(path.read_text(encoding="utf-8"), "external edit")
         self.app.call(run())
 
     def test_shell_exit_status_is_preserved_even_when_stdout_looks_like_an_error(self):
@@ -240,7 +240,7 @@ class SessionImprovementTests(unittest.TestCase):
     def artifact(self, name):
         path = self.root / ".bear-code/tool-results" / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("full output")
+        path.write_text("full output", encoding="utf-8")
         os.utime(path, (1, 1))
         return path
 
@@ -266,7 +266,7 @@ class SessionImprovementTests(unittest.TestCase):
             "webEntries": [{"result": "Full output saved to " + str(artifact)}]})
         with self.assertRaisesRegex(ValueError, "changed during approval"):
             maintenance.cleanup_state(apply=True, expected_paths=preview["paths"])
-        (session.SESSION_DIR / "new-reference.json").write_text("{broken")
+        (session.SESSION_DIR / "new-reference.json").write_text("{broken", encoding="utf-8")
         with self.assertLogs(level="WARNING"):
             self.assertEqual(maintenance.cleanup_state()["count"], 0)
         self.assertTrue(artifact.exists())

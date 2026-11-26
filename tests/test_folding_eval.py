@@ -154,17 +154,17 @@ class FoldingResultTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             path = root / "cases.jsonl"
-            path.write_text(json.dumps({"id": "web", "prompt": "Find this online", "answer": "x", "required_tools": ["web_search"]}) + "\n")
+            path.write_text(json.dumps({"id": "web", "prompt": "Find this online", "answer": "x", "required_tools": ["web_search"]}) + "\n", encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "unavailable tools: web_search"):
                 load_cases(path)
             (root / "files").mkdir()
             (root / "files" / "sheet.xlsx").write_bytes(b"not a text file")
-            path.write_text(json.dumps({"id": "file", "prompt": "Read attachment", "answer": "x", "file_name": "sheet.xlsx"}) + "\n")
+            path.write_text(json.dumps({"id": "file", "prompt": "Read attachment", "answer": "x", "file_name": "sheet.xlsx"}) + "\n", encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "not readable"):
                 load_cases(path)
-            path.write_text(json.dumps({"id": "benchmark", "prompt": "Answer", "answer": "x", "problem_type": "text"}) + "\n")
+            path.write_text(json.dumps({"id": "benchmark", "prompt": "Answer", "answer": "x", "problem_type": "text"}) + "\n", encoding="utf-8")
             self.assertFalse(load_cases(path)[0]["capabilities_verified"])
-            path.write_text(json.dumps({"id": "curated", "prompt": "Answer", "answer": "x", "problem_type": "text", "required_tools": []}) + "\n")
+            path.write_text(json.dumps({"id": "curated", "prompt": "Answer", "answer": "x", "problem_type": "text", "required_tools": []}) + "\n", encoding="utf-8")
             self.assertTrue(load_cases(path)[0]["capabilities_verified"])
 
     def test_paired_runner_writes_isolated_traces(self) -> None:
@@ -230,7 +230,7 @@ class FoldingResultTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             cases_path = root / "cases.jsonl"
-            cases_path.write_text(json.dumps({"id": "case-1", "prompts": ["one", "two", "three"], "answer": "BLUE"}) + "\n")
+            cases_path.write_text(json.dumps({"id": "case-1", "prompts": ["one", "two", "three"], "answer": "BLUE"}) + "\n", encoding="utf-8")
             output = root / "results"
             args = SimpleNamespace(
                 cases=cases_path, output=output, text_only=False, limit=None, validate_only=False,
@@ -251,11 +251,11 @@ class FoldingResultTests(unittest.TestCase):
 
             with patch("agents.eval_folding._load_env_file"), patch("agents.eval_folding._resolve_api_config", return_value=("http://example.test/v1", "fake", True)), patch("agents.eval_folding._run_case", side_effect=fake_run_case), redirect_stdout(StringIO()):
                 asyncio.run(main_async(args))
-            summary = json.loads((output / "summary.json").read_text())
-            review_rows = (output / "review_queue.jsonl").read_text().splitlines()
+            summary = json.loads((output / "summary.json").read_text(encoding="utf-8"))
+            review_rows = (output / "review_queue.jsonl").read_text(encoding="utf-8").splitlines()
             self.assertEqual(summary["valid_pairs"], 1)
             self.assertEqual(len(review_rows), 2)
-            self.assertEqual(len((output / "results.jsonl").read_text().splitlines()), 2)
+            self.assertEqual(len((output / "results.jsonl").read_text(encoding="utf-8").splitlines()), 2)
 
     def test_truncated_final_answer_is_not_scored(self) -> None:
         agent = SimpleNamespace(

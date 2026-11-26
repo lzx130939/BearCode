@@ -246,7 +246,7 @@ class CrashRecoveryTests(unittest.IsolatedAsyncioTestCase):
                                                 capture_output=True, timeout=15)
                 self.assertEqual(result.returncode, 17, result.stderr.decode())
                 root = Path(tmp)
-                stored = json.loads((root / "sessions" / "crash-case.json").read_text())
+                stored = json.loads((root / "sessions" / "crash-case.json").read_text(encoding="utf-8"))
                 self.assertEqual([stored["runtimeState"]["toolCheckpoints"][str(i)]["status"] for i in range(3)],
                                  ["completed", "running", "not_started"])
                 agent = Agent(api_key="fake", api_base="https://example.test/v1", api_protocol=protocol,
@@ -263,8 +263,8 @@ class CrashRecoveryTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIn("Successfully wrote", recovered["0"])
                     self.assertIn("status unknown", recovered["1"])
                     self.assertIn("not started", recovered["2"])
-                    self.assertEqual((root / "0.txt").read_text(), "written once")
-                    self.assertEqual((root / "1.txt").read_text(), "written once")
+                    self.assertEqual((root / "0.txt").read_text(encoding="utf-8"), "written once")
+                    self.assertEqual((root / "1.txt").read_text(encoding="utf-8"), "written once")
                     self.assertFalse((root / "2.txt").exists())
                     # Resume a normal answer: none of the previous tool calls are rerun.
                     agent._auto_save = Mock()

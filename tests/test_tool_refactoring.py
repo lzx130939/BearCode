@@ -54,18 +54,18 @@ class ToolDispatchTests(unittest.IsolatedAsyncioTestCase):
     async def test_unread_or_externally_modified_file_is_not_replaced(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "file.txt"
-            path.write_text("original")
+            path.write_text("original", encoding="utf-8")
             state = {}
             write_input = {"file_path": str(path), "content": "replacement"}
             unread = await tools.execute_tool("write_file", write_input, state)
             self.assertIn("must read this file", unread)
             await tools.execute_tool("read_file", {"file_path": str(path)}, state)
             recorded = state[str(path.resolve())]
-            path.write_text("external change")
+            path.write_text("external change", encoding="utf-8")
             os.utime(path, ns=(recorded.modified_ns + 5_000_000_000, recorded.modified_ns + 5_000_000_000))
             stale = await tools.execute_tool("write_file", write_input, state)
             self.assertIn("modified externally", stale)
-            self.assertEqual(path.read_text(), "external change")
+            self.assertEqual(path.read_text(encoding="utf-8"), "external change")
             self.assertEqual(state[str(path.resolve())], recorded)
 
     async def test_unreadable_file_metadata_returns_tool_error_before_mutation(self):
@@ -80,7 +80,7 @@ class PythonSearchTests(unittest.TestCase):
     def test_searching_a_single_file_respects_include_pattern(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "example.py"
-            path.write_text("first\nneedle\nlast")
+            path.write_text("first\nneedle\nlast", encoding="utf-8")
             result = asyncio.run(tools.execute_tool("grep_search", {"path": str(path), "pattern": "needle"}))
             self.assertEqual(result, f"{path}:2:needle")
             self.assertEqual(tools._grep_python("needle", str(path), "*.txt"), "No matches found.")
@@ -93,12 +93,12 @@ class PythonSearchTests(unittest.TestCase):
     def test_directory_symlink_cycles_are_not_followed(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            (root / "file.txt").write_text("needle")
+            (root / "file.txt").write_text("needle", encoding="utf-8")
             (root / "loop").symlink_to(root, target_is_directory=True)
             (root / ".hidden").mkdir()
-            (root / ".hidden" / "skip.txt").write_text("needle")
+            (root / ".hidden" / "skip.txt").write_text("needle", encoding="utf-8")
             (root / "node_modules").mkdir()
-            (root / "node_modules" / "skip.txt").write_text("needle")
+            (root / "node_modules" / "skip.txt").write_text("needle", encoding="utf-8")
             self.assertEqual(tools._grep_python("needle", tmp, None), f"{root / 'file.txt'}:1:needle")
 
     def test_match_limit_is_global_across_directories(self):
@@ -107,7 +107,7 @@ class PythonSearchTests(unittest.TestCase):
             for name in ("first", "second"):
                 folder = root / name
                 folder.mkdir()
-                (folder / "hits.txt").write_text("\n".join(["needle"] * 150))
+                (folder / "hits.txt").write_text("\n".join(["needle"] * 150), encoding="utf-8")
             result = tools._grep_python("needle", tmp, None)
             self.assertEqual(len(result.splitlines()), 101)
             self.assertEqual(result.splitlines()[-1], "... and 100 more matches")

@@ -148,7 +148,7 @@ class RuntimeBoundariesTests(unittest.IsolatedAsyncioTestCase):
                     self.assertLess(len(preview), 7000)
                 after = set((self.root / ".bear-code" / "tool-results").glob("*.txt"))
                 self.assertEqual(len(after - before), 10)
-                self.assertTrue(all(path.read_text() == raw for path in after - before))
+                self.assertTrue(all(path.read_text(encoding="utf-8") == raw for path in after - before))
                 self.assertEqual(len(serializations), 21)
                 self.assertLess(sum(serializations), 1024 * 1024)
                 saved = load_session(agent.session_id)
@@ -193,10 +193,10 @@ class RuntimeBoundariesTests(unittest.IsolatedAsyncioTestCase):
             agent._recover_tool_checkpoints()
             write.assert_not_called()
         self.assertEqual(agent._openai_messages, recovered)
-        artifact.write_text("corrupt artifact")
+        artifact.write_text("corrupt artifact", encoding="utf-8")
         agent._openai_messages, agent._tool_checkpoints = messages, journal
         agent._recover_tool_checkpoints()
-        self.assertEqual(artifact.read_text(), "legacy" * 10000)
+        self.assertEqual(artifact.read_text(encoding="utf-8"), "legacy" * 10000)
         self.assertEqual(len(list(artifact.parent.glob("*.txt"))), 1)
 
 

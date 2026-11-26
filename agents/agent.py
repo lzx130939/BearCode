@@ -868,7 +868,7 @@ class Agent(BackgroundSkillTasks, ToolExecution, ContextRuntime, StreamAttempts,
             from .storage import write_json
             for path in self._background_jobs_dir().glob("*.json"):
                 try:
-                    job = json.loads(path.read_text())
+                    job = json.loads(path.read_text(encoding="utf-8"))
                     # 如果记录的这个任务session是当前我的session且任务状态不是running，则释放这个任务的owner_pid
                     if job.get("owner_session") == self.session_id and job.get("status") != "running":
                         job["owner_pid"] = None

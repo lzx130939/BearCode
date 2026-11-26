@@ -163,7 +163,7 @@ def apply_candidate(candidate_id: str, *, manual_review: bool = False, expected_
                 from .online_skill_eval import _lineage_id_for_skill
                 registry = get_evolution_dir() / "online-eval" / "champions.json"
                 # 从registry中读取champion信息获取registry[champions][skill_lineage_id]，如果没有就返回空字典
-                champion = (json.loads(registry.read_text()).get("champions", {}).get(_lineage_id_for_skill(candidate["skill"]), {})
+                champion = (json.loads(registry.read_text(encoding="utf-8")).get("champions", {}).get(_lineage_id_for_skill(candidate["skill"]), {})
                             if registry.exists() else {})
                 # 只有当前candidate的快照跟champion的快照一致，才可以进行apply操作，否则就报错
                 # champion中的snapshot 用来明确记录：究竟哪个技能版本赢了。
@@ -209,7 +209,7 @@ def rollback_skill(name: str) -> dict:
         return {"ok": False, "error": "No pre-change snapshot found"}
     # 同时锁上skill文件和history文件，防止其他进程修改
     with state_lock(target), state_lock(history):
-        rows = [json.loads(line) for line in history.read_text().splitlines() if line.strip()]
+        rows = [json.loads(line) for line in history.read_text(encoding="utf-8").splitlines() if line.strip()]
         # 找到符合条件的最后一条记录，要求event=snapshot，file=target，content是字符串类型
         snapshot = next((row for row in reversed(rows) if row.get("event") == "snapshot"
                          and row.get("file") == str(target) and isinstance(row.get("content"), str)), None)
@@ -219,7 +219,7 @@ def rollback_skill(name: str) -> dict:
         # 在回滚前依旧要保存当前的版本，方便回滚后再回滚回来
         from .storage import append_jsonl
         append_jsonl(history, {"event": "snapshot", "actor": "rollback", "skill": name,
-                              "file": str(target), "content": target.read_text()})
+                              "file": str(target), "content": target.read_text(encoding="utf-8")})
         # 将snapshot中的内容写入到target文件中
         atomic_write_text(target, snapshot["content"])
         reset_skill_cache()

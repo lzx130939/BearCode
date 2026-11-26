@@ -86,7 +86,7 @@ class CompleteAuditRuntimeTests(unittest.IsolatedAsyncioTestCase):
                     target = Path(tmp) / "valid.txt"
                     await self.run_calls(agent, protocol, [("write_file", malformed),
                         ("write_file", {"file_path": str(target), "content": "valid"})])
-                    self.assertEqual(target.read_text(), "valid")
+                    self.assertEqual(target.read_text(encoding="utf-8"), "valid")
                     history = agent._openai_messages if agent.use_openai else agent._anthropic_messages
                     self.assertIn("invalid arguments", str(history))
 
@@ -96,7 +96,7 @@ class CompleteAuditRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 agent = self.agent(api_protocol=protocol, max_turns=1)
                 target = Path(tmp) / "one.txt"
                 await self.run_calls(agent, protocol, [("write_file", {"file_path": str(target), "content": "one"})])
-                self.assertEqual(target.read_text(), "one")
+                self.assertEqual(target.read_text(encoding="utf-8"), "one")
                 self.assertEqual(agent.current_turns, 1)
 
     async def test_mcp_confirmations_are_not_reused_and_include_arguments(self):
@@ -130,7 +130,7 @@ class CompleteAuditRuntimeTests(unittest.IsolatedAsyncioTestCase):
             preview = agent._persist_large_result("read_file", original)
             files = list((Path(tmp) / ".bear-code" / "tool-results").glob("*.txt"))
             self.assertEqual(len(files), 1)
-            self.assertIn("UNIQUE_MIDDLE", files[0].read_text())
+            self.assertIn("UNIQUE_MIDDLE", files[0].read_text(encoding="utf-8"))
             self.assertLess(len(preview), 7000)
 
     async def test_successful_shell_keeps_stderr(self):
@@ -187,7 +187,7 @@ class CompleteAuditRuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(peak, 1)
             await agent.aclose()
             self.assertEqual(len(list(Path(tmp).glob("*.json"))), 3)
-            self.assertTrue(all(json.loads(path.read_text())["status"] == "queued" for path in Path(tmp).glob("*.json")))
+            self.assertTrue(all(json.loads(path.read_text(encoding="utf-8"))["status"] == "queued" for path in Path(tmp).glob("*.json")))
 
     async def test_persisted_background_jobs_resume_without_duplicate_dispatch(self):
         agent = self.agent()
@@ -195,7 +195,7 @@ class CompleteAuditRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(agent, "_online_evolution_enabled", return_value=True), \
                 patch.object(agent, "_run_online_skill_evolution", new=AsyncMock(return_value={"ok": True})) as learn:
             path = Path(tmp) / "saved.json"
-            path.write_text(json.dumps({"status": "queued", "attempts": 0, "data": {"kind": "evolution", "window": {"messages": []}}}))
+            path.write_text(json.dumps({"status": "queued", "attempts": 0, "data": {"kind": "evolution", "window": {"messages": []}}}), encoding="utf-8")
             agent._resume_background_skill_jobs()
             agent._resume_background_skill_jobs()
             await agent.drain_background_skill_tasks()
@@ -214,11 +214,11 @@ class CompleteAuditRuntimeTests(unittest.IsolatedAsyncioTestCase):
         agent._openai_client.close = AsyncMock()
         with tempfile.TemporaryDirectory() as tmp, patch.object(agent, "_background_jobs_dir", return_value=Path(tmp)):
             path = Path(tmp) / "bad.json"
-            path.write_text('["invalid job"]')
+            path.write_text('["invalid job"]', encoding="utf-8")
             with self.assertLogs(level="ERROR"):
                 await agent.aclose()
             agent._openai_client.close.assert_awaited_once()
-            self.assertEqual(path.read_text(), '["invalid job"]')
+            self.assertEqual(path.read_text(encoding="utf-8"), '["invalid job"]')
 
     async def test_repl_eval_uses_real_formatter_without_model_calls(self):
         agent = self.agent()
@@ -284,7 +284,7 @@ class CompleteAuditRuntimeTests(unittest.IsolatedAsyncioTestCase):
                     self.assertFalse(target.exists())
                     self.assertEqual(agent.last_finish_reason, "incomplete")
                 else:
-                    self.assertEqual(target.read_text(), "SDK verified")
+                    self.assertEqual(target.read_text(encoding="utf-8"), "SDK verified")
                     self.assertEqual(call_count, 2)
 
 
@@ -301,7 +301,7 @@ class CompleteAuditDataTests(unittest.IsolatedAsyncioTestCase):
     def skill(self, body="Always answer in English."):
         path = self.root / "skills" / "demo" / "SKILL.md"
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("---\nname: demo\ndescription: demo\nversion: 0.1.0\n---\n" + body)
+        path.write_text("---\nname: demo\ndescription: demo\nversion: 0.1.0\n---\n" + body, encoding="utf-8")
         skill = SimpleNamespace(name="demo", skill_dir=str(path.parent), description="demo", prompt_template=body)
         self.stack.enter_context(patch("agents.skills.get_skill_by_name", return_value=skill))
         return path
@@ -309,7 +309,7 @@ class CompleteAuditDataTests(unittest.IsolatedAsyncioTestCase):
     async def test_chinese_memory_query_triggers_prefetch(self):
         directory = self.root / "memory"
         directory.mkdir()
-        (directory / "one.md").write_text("memory")
+        (directory / "one.md").write_text("memory", encoding="utf-8")
         with patch.object(memory, "get_memory_dir", return_value=directory), \
                 patch.object(memory, "select_relevant_memories", new=AsyncMock(return_value=[])) as select:
             prefetch = memory.start_memory_prefetch("按照之前的习惯帮我修改代码", AsyncMock(), set(), 0)
@@ -324,10 +324,10 @@ class CompleteAuditDataTests(unittest.IsolatedAsyncioTestCase):
             first = memory.save_memory("代码偏好", "first", "user", "first preference")
             second = memory.save_memory("回答偏好", "second", "user", "second preference")
             self.assertNotEqual(first, second)
-            self.assertIn("first preference", (directory / first).read_text())
+            self.assertIn("first preference", (directory / first).read_text(encoding="utf-8"))
             with self.assertRaises(ValueError):
                 memory.delete_memory("../outside.md")
-            (directory / "large.md").write_text("中" * 5000)
+            (directory / "large.md").write_text("中" * 5000, encoding="utf-8")
             header = memory.MemoryHeader("large.md", str(directory / "large.md"), 0, "long", "user")
             with patch.object(memory, "scan_memory_headers", return_value=[header]):
                 selected = await memory.select_relevant_memories("query", AsyncMock(return_value='{"selected_memories":["large.md"]}'), set())
@@ -354,20 +354,20 @@ class CompleteAuditDataTests(unittest.IsolatedAsyncioTestCase):
 
     def test_staging_publish_validation_and_rollback_keep_versions_separate(self):
         path = self.skill()
-        original = path.read_text()
+        original = path.read_text(encoding="utf-8")
         staged = candidates.stage_candidate("merge", {"skill_name": "demo", "lesson": "Prefer Chinese", "instructions": "Always answer in Chinese.", "preserve_existing": True})
-        self.assertEqual(path.read_text(), original)
+        self.assertEqual(path.read_text(encoding="utf-8"), original)
         self.assertFalse(candidates.apply_candidate(staged["candidate_id"])["ok"])
         self.assertTrue(candidates.apply_candidate(staged["candidate_id"], manual_review=True)["ok"])
-        self.assertNotIn("Always answer in English.", path.read_text())
-        self.assertIn("Always answer in Chinese.", path.read_text())
+        self.assertNotIn("Always answer in English.", path.read_text(encoding="utf-8"))
+        self.assertIn("Always answer in Chinese.", path.read_text(encoding="utf-8"))
         self.assertTrue(candidates.rollback_skill("demo")["ok"])
-        self.assertEqual(path.read_text(), original)
+        self.assertEqual(path.read_text(encoding="utf-8"), original)
 
     def test_stale_candidate_and_changed_approval_are_rejected(self):
         path = self.skill()
         staged = candidates.stage_candidate("merge", {"skill_name": "demo", "lesson": "new", "instructions": "new"})
-        path.write_text(path.read_text() + "external change")
+        path.write_text(path.read_text(encoding="utf-8") + "external change", encoding="utf-8")
         self.assertFalse(candidates.apply_candidate(staged["candidate_id"], manual_review=True)["ok"])
         self.assertIn("changed during approval", candidates.apply_candidate(staged["candidate_id"], manual_review=True, expected_hash="wrong")["error"])
 
@@ -419,7 +419,7 @@ class CompleteAuditDataTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(bundle["promoted"])
         ev._persist_eval_artifacts("demo", samples, bundle)
         self.assertTrue(candidates.apply_candidate(staged["candidate_id"])["ok"])
-        self.assertIn("CANDIDATE instructions", path.read_text())
+        self.assertIn("CANDIDATE instructions", path.read_text(encoding="utf-8"))
 
     def test_concurrent_champion_change_is_not_overwritten(self):
         root = self.root / "evolution" / "online-eval"
@@ -427,12 +427,12 @@ class CompleteAuditDataTests(unittest.IsolatedAsyncioTestCase):
         lineage = ev._lineage_id_for_skill("demo")
         current = {"champions": {lineage: {"snapshot": {"name": "demo", "instructions": "NEWER"}}}}
         registry = root / "champions.json"
-        registry.write_text(json.dumps(current))
+        registry.write_text(json.dumps(current), encoding="utf-8")
         bundle = {"promoted": True, "status": "healthy", "reason": "test", "previous_champion_snapshot": None,
                   "best_snapshot": {"name": "demo", "instructions": "STALE"}, "best_test": {}, "outputs": [], "judgments": []}
         result = ev._persist_eval_artifacts("demo", [], bundle)
         self.assertFalse(result["promotion"]["promoted"])
-        self.assertEqual(json.loads(registry.read_text()), current)
+        self.assertEqual(json.loads(registry.read_text(encoding="utf-8")), current)
 
     def test_json_schema_checks_fields_types_and_disallows_remote_references(self):
         check = {"mode": "json_schema", "schema": {"type": "object", "required": ["risks"], "properties": {"risks": {"type": "array", "items": {"type": "string"}}}}}
@@ -446,44 +446,44 @@ class CompleteAuditDataTests(unittest.IsolatedAsyncioTestCase):
         home, project = self.root / "home", self.root / "project"
         (project / ".bear").mkdir(parents=True)
         settings = project / ".bear" / "settings.json"
-        settings.write_text(json.dumps({"permissions": {"allow": ["mcp_start"], "deny": ["write_file(blocked.txt)"]}}))
+        settings.write_text(json.dumps({"permissions": {"allow": ["mcp_start"], "deny": ["write_file(blocked.txt)"]}}), encoding="utf-8")
         with patch("pathlib.Path.home", return_value=home), patch("pathlib.Path.cwd", return_value=project):
             tools.reset_permission_cache()
             self.assertEqual(tools.check_permission("mcp_start", {"server_name": "demo"}, "dontAsk")["action"], "deny")
             self.assertEqual(tools.check_permission("write_file", {"file_path": "blocked.txt"}, "acceptEdits")["action"], "deny")
             project_trust.trust_project()
             self.assertEqual(tools.check_permission("mcp_start", {"server_name": "demo"}, "dontAsk")["action"], "allow")
-            (project / ".mcp.json").write_text('{"demo":{"command":"changed"}}')
+            (project / ".mcp.json").write_text('{"demo":{"command":"changed"}}', encoding="utf-8")
             self.assertEqual(tools.check_permission("mcp_start", {"server_name": "demo"}, "dontAsk")["action"], "deny")
         tools.reset_permission_cache()
 
     def test_trust_invalidates_even_when_mcp_file_metadata_is_preserved(self):
         home, project = self.root / "home", self.root / "project"
         (project / ".bear").mkdir(parents=True)
-        (project / ".bear" / "settings.json").write_text('{"permissions":{"allow":["mcp_start"]}}')
+        (project / ".bear" / "settings.json").write_text('{"permissions":{"allow":["mcp_start"]}}', encoding="utf-8")
         config = project / ".mcp.json"
-        config.write_text('{"demo":{"command":"one"}}')
+        config.write_text('{"demo":{"command":"one"}}', encoding="utf-8")
         with patch("pathlib.Path.home", return_value=home), patch("pathlib.Path.cwd", return_value=project):
             tools.reset_permission_cache()
             project_trust.trust_project()
             self.assertEqual(tools.check_permission("mcp_start", {"server_name": "demo"}, "dontAsk")["action"], "allow")
             stat = config.stat()
-            config.write_text('{"demo":{"command":"two"}}')
+            config.write_text('{"demo":{"command":"two"}}', encoding="utf-8")
             os.utime(config, ns=(stat.st_atime_ns, stat.st_mtime_ns))
             self.assertEqual(tools.check_permission("mcp_start", {"server_name": "demo"}, "dontAsk")["action"], "deny")
         tools.reset_permission_cache()
 
     def test_invalid_candidate_fields_are_rejected_before_any_write(self):
         path = self.skill()
-        original = path.read_text()
+        original = path.read_text(encoding="utf-8")
         staged = candidates.stage_candidate("merge", {"skill_name": "demo", "lesson": "new", "instructions": "new"})
         proposal_path = Path(staged["file"])
-        proposal = json.loads(proposal_path.read_text())
+        proposal = json.loads(proposal_path.read_text(encoding="utf-8"))
         proposal["write_input"]["unexpected"] = "value"
-        proposal_path.write_text(json.dumps(proposal))
+        proposal_path.write_text(json.dumps(proposal), encoding="utf-8")
         with self.assertRaises(ValueError):
             candidates.apply_candidate(staged["candidate_id"], manual_review=True)
-        self.assertEqual(path.read_text(), original)
+        self.assertEqual(path.read_text(encoding="utf-8"), original)
 
     async def test_public_evaluation_includes_staged_candidate_and_enables_publish(self):
         path = self.skill("BASE instructions")
@@ -517,13 +517,13 @@ class CompleteAuditDataTests(unittest.IsolatedAsyncioTestCase):
 
     def test_provenance_reader_advances_cursor_bounds_rows_and_recovers_rotation(self):
         log = self.root / "source.jsonl"
-        log.write_text("".join(json.dumps({"skill": "demo", "index": i}) + "\n" for i in range(5)))
+        log.write_text("".join(json.dumps({"skill": "demo", "index": i}) + "\n" for i in range(5)), encoding="utf-8")
         self.assertEqual([x["index"] for x in load_recent_sources(log, 2)], [3, 4])
         self.assertEqual([x["index"] for x in load_recent_sources(log, 2)], [3, 4])
-        with log.open("a") as stream:
+        with log.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps({"skill": "demo", "index": 5}) + "\n")
         self.assertEqual([x["index"] for x in load_recent_sources(log, 2)], [4, 5])
-        log.write_text('{"skill":"demo","index":9}\n')
+        log.write_text('{"skill":"demo","index":9}\n', encoding="utf-8")
         self.assertEqual([x["index"] for x in load_recent_sources(log, 2)], [9])
 
     def test_cleanup_is_preview_only_and_preserves_champion_run(self):
@@ -533,7 +533,7 @@ class CompleteAuditDataTests(unittest.IsolatedAsyncioTestCase):
             path.mkdir(parents=True)
             os.utime(path, (old_time, old_time))
         registry = self.root / "evolution" / "online-eval" / "champions.json"
-        registry.write_text('{"champions":{"demo":{"run_id":"keep"}}}')
+        registry.write_text('{"champions":{"demo":{"run_id":"keep"}}}', encoding="utf-8")
         with patch("pathlib.Path.home", return_value=self.root / "home"):
             preview = maintenance.cleanup_state()
             self.assertEqual(preview["count"], 1)

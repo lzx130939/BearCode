@@ -14,8 +14,16 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
         python: ['3.11', '3.12']
+        utf8: ['1']
+        include:
+          - os: windows-latest
+            python: '3.12'
+            utf8: '0'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
+    env:
+      PYTHONUTF8: ${{ matrix.utf8 }}
+      PYTHONIOENCODING: ${{ matrix.utf8 == '0' && 'cp1252' || 'utf-8' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

@@ -30,7 +30,7 @@ def is_project_trusted(project: Path | None = None) -> bool:
     考虑project地址的指纹是否再trust_file()中存在，如果存在则说明该项目已经被信任，返回True，否则返回False"""
     project = (project or Path.cwd()).resolve()
     try:
-        records = json.loads(trust_file().read_text())
+        records = json.loads(trust_file().read_text(encoding="utf-8"))
         return records.get(str(project)) == project_fingerprint(project)
     except (OSError, ValueError, AttributeError):
         return False
@@ -42,7 +42,7 @@ def trust_project(project: Path | None = None) -> None:
     # 这里的with，如果观察内部可以发现其本质就是with lock 和 with path.with_name(path.name + ".lock").open("a+b") as stream
     # 当然同进程同线程的话重入不会再次进入with path.with_name(path.name + ".lock").open("a+b") as stream
     with state_lock(path):
-        records = json.loads(path.read_text()) if path.exists() else {}
+        records = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
         if not isinstance(records, dict):
             raise ValueError("Invalid project trust registry")
         records[str(project)] = project_fingerprint(project)

@@ -56,19 +56,19 @@ class ReviewBoundaryTests(unittest.IsolatedAsyncioTestCase):
             reads = {}
             result = await execute_tool("write_file", {"file_path": str(destination), "content": "correct"}, reads)
             self.assertFalse(result.startswith("Error"), result)
-            self.assertEqual(destination.read_text(), "correct")
+            self.assertEqual(destination.read_text(encoding="utf-8"), "correct")
             self.assertFalse((Path(tmp) / "file.txt").exists())
             self.assertEqual(set(reads), {str(destination.resolve())})
 
     async def test_missing_absolute_read_and_edit_do_not_touch_same_named_local_file(self):
         with tempfile.TemporaryDirectory() as tmp, working_directory(tmp):
             local = Path(tmp) / "file.txt"
-            local.write_text("original")
+            local.write_text("original", encoding="utf-8")
             missing = Path(tmp) / "missing" / "file.txt"
             for name, extra in (("read_file", {}), ("edit_file", {"old_string": "original", "new_string": "changed"})):
                 result = await execute_tool(name, {"file_path": str(missing), **extra})
                 self.assertTrue(result.startswith("Error"), result)
-                self.assertEqual(local.read_text(), "original")
+                self.assertEqual(local.read_text(encoding="utf-8"), "original")
                 self.assertFalse(missing.exists())
 
     async def test_plan_write_uses_authorized_absolute_file(self):
@@ -81,7 +81,7 @@ class ReviewBoundaryTests(unittest.IsolatedAsyncioTestCase):
             inp = {"file_path": str(plan), "content": "Proposed change"}
             self.assertTrue(await agent.authorize_operation("write_file", inp))
             await agent._execute_tool_call("write_file", inp)
-            self.assertEqual(plan.read_text(), "Proposed change")
+            self.assertEqual(plan.read_text(encoding="utf-8"), "Proposed change")
             self.assertFalse((Path(tmp) / plan.name).exists())
 
     async def test_invalid_folding_preserves_entire_history_for_both_backends_and_modes(self):
@@ -166,7 +166,7 @@ class ReviewBoundaryTests(unittest.IsolatedAsyncioTestCase):
                         original = "---\nname: demo\ndescription: Demo skill\nversion: 0.1.0\n---\nOriginal guidance\n"
                         if action == "merge":
                             skill.parent.mkdir(parents=True)
-                            skill.write_text(original)
+                            skill.write_text(original, encoding="utf-8")
                         stack.enter_context(patch("agents.skills.discover_skills", return_value=[]))
                         stack.enter_context(patch("agents.skills.retrieve_relevant_skills", return_value=[]))
                         stack.enter_context(patch("agents.skills.get_skill_by_name", return_value=None))
@@ -183,7 +183,7 @@ class ReviewBoundaryTests(unittest.IsolatedAsyncioTestCase):
                         )
                         self.assertEqual(result["ok"], allowed, result)
                         if action == "merge":
-                            self.assertEqual(skill.read_text() != original, allowed)
+                            self.assertEqual(skill.read_text(encoding="utf-8") != original, allowed)
                         else:
                             self.assertEqual(skill.exists(), allowed)
 
