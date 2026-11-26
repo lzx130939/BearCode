@@ -304,7 +304,6 @@ class WebTests(unittest.TestCase):
         worker = threading.Thread(target=server.serve_forever,daemon=True)
         worker.start()
         self.addCleanup(server.server_close)
-        self.addCleanup(server.shutdown)
         return server
 
     def test_http_assets_csrf_cookie_origin_and_host_guards(self):
@@ -331,6 +330,7 @@ class WebTests(unittest.TestCase):
         response = client.getresponse();self.assertEqual(response.status,200);sid=json.loads(response.read())["id"]
         client.request("GET","/api/events?session="+sid,headers={"Cookie":cookie})
         response=client.getresponse();self.assertEqual(response.status,200)
+        self.addCleanup(response.close)
         self.assertEqual(response.getheader("Content-Type"),"text/event-stream; charset=utf-8")
         self.assertEqual(response.readline(),b'event: state\n')
         self.assertIn(sid.encode(),response.readline())

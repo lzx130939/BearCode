@@ -15,6 +15,7 @@ import os
 import re
 from pathlib import Path
 import secrets
+import socket
 import threading
 import time
 from urllib.parse import parse_qs, urlsplit
@@ -33,6 +34,7 @@ ASSETS = Path(__file__).resolve().parent.parent / "web"
 MODES = {"default", "plan", "acceptEdits", "dontAsk"}
 CURRENT_TOOL = ContextVar("web_tool", default=None)
 STREAM_HEARTBEAT_SECONDS = 12
+HTTP_CONNECTION_TIMEOUT_SECONDS = 5
 STREAM_EVENT_LIMIT = 128
 STREAM_BYTE_LIMIT = 2 * 1024 * 1024
 WEB_TEXT_LIMIT = 128000
@@ -440,6 +442,7 @@ class WebApp:
         self._capacity_lock = None
         self.active = None
         self.stopping = False
+        self._servers = set()
         self.loop = asyncio.new_event_loop()
         self.thread = threading.Thread(target=self.loop.run_forever, daemon=True)
         self.thread.start()
@@ -617,8 +620,14 @@ class WebApp:
             raise WebError("接口不存在。", 404)
         return view.snapshot
 
+    def _wake_streams(self):
+        for view in list(self.conversations.values()):
+            with view.condition:
+                view.condition.notify_all()
+
     async def shutdown(self):
         self.stopping = True
+        self._wake_streams()
         for view in self.conversations.values():
             if view.task and not view.task.done():
                 view.agent.abort()
@@ -631,22 +640,106 @@ class WebApp:
             view.changed()
 
     def close(self):
-        self.call(self.shutdown())
-        self.loop.call_soon_threadsafe(self.loop.stop)
-        self.thread.join(timeout=5)
-        self.loop.close()
+        if self.loop.is_closed():
+            return
+        try:
+            self.call(self.shutdown())
+        finally:
+            try:
+                # Keep the event loop available until HTTP handlers have returned
+                # from any app.call() already in progress.
+                for server in list(self._servers):
+                    server.server_close()
+            finally:
+                self.loop.call_soon_threadsafe(self.loop.stop)
+                self.thread.join(timeout=5)
+                self.loop.close()
 
 
 class WebServer(ThreadingHTTPServer):
-    daemon_threads = True
+    # Request threads must finish before Python starts closing stderr/stdout.
+    daemon_threads = False
 
     def __init__(self, address, app):
         self.app = app
+        self._closing = threading.Event()
+        self._closed = False
+        self._close_lock = threading.Lock()
+        self._requests_lock = threading.Lock()
+        self._requests = set()
+        self._serving_thread = None
         super().__init__(address, WebHandler)
+        app._servers.add(self)
+
+    def serve_forever(self, poll_interval=0.5):
+        with self._requests_lock:
+            if self._closing.is_set():
+                return
+            self._serving_thread = threading.current_thread()
+        try:
+            super().serve_forever(poll_interval)
+        finally:
+            with self._requests_lock:
+                self._serving_thread = None
+
+    def process_request(self, request, client_address):
+        with self._requests_lock:
+            if self._closing.is_set():
+                self.shutdown_request(request)
+                return
+            self._requests.add(request)
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self.shutdown_request(request)
+            with self._requests_lock:
+                self._requests.discard(request)
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            with self._requests_lock:
+                self._requests.discard(request)
+
+    def server_close(self):
+        with self._close_lock:
+            if self._closed:
+                return
+            self._closing.set()
+            self.app._wake_streams()
+            with self._requests_lock:
+                worker = self._serving_thread
+            if worker is not None and worker is not threading.current_thread():
+                self.shutdown()
+                worker.join()
+            with self._requests_lock:
+                requests = list(self._requests)
+            # Interrupt keep-alive reads, partial POST bodies and blocked writes,
+            # then let ThreadingHTTPServer join every non-daemon request thread.
+            for request in requests:
+                try:
+                    request.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+            super().server_close()
+            self._closed = True
+            self.app._servers.discard(self)
 
 
 class WebHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
+    # Bound idle reads even if an OS doesn't interrupt recv() on shutdown().
+    timeout = HTTP_CONNECTION_TIMEOUT_SECONDS
+
+    def handle(self):
+        try:
+            super().handle()
+        except (ConnectionError, TimeoutError):
+            # Also covers failed error responses and disconnects while waiting
+            # for the next request, outside do_GET()/do_POST()'s main try block.
+            self.close_connection = True
 
     def log_message(self, *_args):
         pass
@@ -673,6 +766,8 @@ class WebHandler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def guard(self, mutation=False, bootstrap=False):
+        if self.server.app.stopping or self.server._closing.is_set():
+            raise WebError("服务正在关闭。", 503)
         port = self.server.server_port
         host = self.headers.get("Host", "")
         if host not in {f"127.0.0.1:{port}", f"localhost:{port}"}:
@@ -707,13 +802,18 @@ class WebHandler(BaseHTTPRequestHandler):
                 sid = parse_qs(parsed.query).get("session", [""])[0]
                 view = self.server.app.call(self.server.app.open_stream(sid))
                 try:
+                    self.close_connection = True
                     self.headers_for(200, "text/event-stream; charset=utf-8")
-                    self.connection.settimeout(20)
+                    self.connection.settimeout(HTTP_CONNECTION_TIMEOUT_SECONDS)
                     revision = -1
-                    while not self.server.app.stopping:
+                    while True:
                         with view.condition:
+                            if self.server.app.stopping or self.server._closing.is_set():
+                                break
                             if revision == view.revision:
                                 view.condition.wait(timeout=STREAM_HEARTBEAT_SECONDS)
+                            if self.server.app.stopping or self.server._closing.is_set():
+                                break
                         revision, frames = view.stream_updates(revision)
                         if not frames:
                             self.wfile.write(b": heartbeat\n\n")
@@ -723,12 +823,13 @@ class WebHandler(BaseHTTPRequestHandler):
                 finally:
                     with view.condition:
                         view.stream_clients -= 1
+                        view.condition.notify_all()
                 self.close_connection = True
                 return
             self.send_json(200, self.server.app.call(self.server.app.dispatch("GET", parsed.path)))
         except WebError as exc:
             self.send_json(exc.status, {"error": str(exc)})
-        except (BrokenPipeError, ConnectionResetError, TimeoutError):
+        except (ConnectionError, TimeoutError):
             self.close_connection = True
         except Exception as exc:
             self.send_json(500, {"error": self.server.app.safe_error(exc)})
@@ -736,7 +837,7 @@ class WebHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         try:
             self.guard(mutation=True)
-            self.connection.settimeout(15)
+            self.connection.settimeout(HTTP_CONNECTION_TIMEOUT_SECONDS)
             size = int(self.headers.get("Content-Length", "0"))
             if size < 1 or size > 512000:
                 raise WebError("请求内容过大或为空。", 413)
@@ -752,7 +853,7 @@ class WebHandler(BaseHTTPRequestHandler):
         except (ValueError, UnicodeError):
             self.close_connection = True
             self.send_json(400, {"error": "无效的 JSON 请求。"})
-        except (BrokenPipeError, ConnectionResetError):
+        except (ConnectionError, TimeoutError):
             self.close_connection = True
         except Exception as exc:
             self.send_json(500, {"error": self.server.app.safe_error(exc)})
