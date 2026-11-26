@@ -1,4 +1,6 @@
-"""Built-in tool schemas shared by the agent runtime and tool dispatcher."""
+"""
+tool的定义示意图
+Built-in tool schemas shared by the agent runtime and tool dispatcher."""
 from __future__ import annotations
 
 from typing import Any, TypedDict
@@ -13,7 +15,7 @@ class _RequiredToolDefinition(TypedDict):
 class ToolDef(_RequiredToolDefinition, total=False):
     deferred: bool
 
-
+# 定义内置工具方法
 tool_definitions: list[ToolDef] = [
     {
         "name": "read_file",

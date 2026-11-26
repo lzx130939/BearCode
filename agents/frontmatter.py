@@ -11,7 +11,21 @@ class FrontmatterResult:
 
 
 def parse_frontmatter(content: str) -> FrontmatterResult:
+    """解析从记忆文件见读取出来的str，返回一个FrontmatterResult对象，包含meta和body两个属性
+
+    预期的str格式如下(memory/skill/Agent都会共用这种格式)：
+    ```markdown
+    ---
+    name: memory name
+    description: one-line description
+    type: user|feedback|project|reference
+    XXX：xx
+    ---
+    Memory content here.<body>
+    ```
+    """
     lines = content.split("\n")
+    # 表示没有了前面的header信息，直接返回body
     if not lines or lines[0].strip() != "---":
         return FrontmatterResult(body=content)
 
@@ -23,6 +37,7 @@ def parse_frontmatter(content: str) -> FrontmatterResult:
     if end_idx == -1:
         return FrontmatterResult(body=content)
 
+    # 获取meta信息
     meta: dict[str, str] = {}
     for i in range(1, end_idx):
         colon_idx = lines[i].find(":")
@@ -33,6 +48,7 @@ def parse_frontmatter(content: str) -> FrontmatterResult:
         if key:
             meta[key] = value
 
+    # 获取body信息
     body = "\n".join(lines[end_idx + 1:]).strip()
     return FrontmatterResult(meta=meta, body=body)
 

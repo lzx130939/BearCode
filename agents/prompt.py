@@ -114,6 +114,10 @@ def _resolve_includes(
     visited: set[str] | None = None,
     depth: int = 0,
 ) -> str:
+    """解决claude.md文件中@include的引用，支持相对路径、绝对路径和home目录路径对应文件被读入并替换到原位置
+    但是规定递归深度(_MAX_INCLUDE_DEPTH)且防止循环引用（visited）
+
+    visited表示已经访问过的文件路径集合"""
     if depth >= _MAX_INCLUDE_DEPTH:
         return content
     if visited is None:
@@ -166,7 +170,8 @@ def _load_rules_dir(directory: Path) -> str:
 
 
 def load_claude_md() -> str:
-    """Walk up from cwd collecting all CLAUDE.md files, resolving @includes."""
+    """当前目录及祖先目录中的 CLAUDE.md + .bear/rules/*.md 都加载出来，并且解析其中的 @include，返回最终的内容
+    Walk up from cwd collecting all CLAUDE.md files, resolving @includes."""
     parts: list[str] = []
     d = Path.cwd().resolve()
     while True:
@@ -191,7 +196,9 @@ def load_claude_md() -> str:
 
 
 def get_git_context() -> str:
-    """Get git branch, recent commits, and status."""
+    """
+    获取当前目录下git的分支，最近的提交记录，以及git状态
+    Get git branch, recent commits, and status."""
     try:
         opts = {"encoding": "utf-8", "timeout": 3, "capture_output": True}
         branch = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], **opts).stdout.strip()
@@ -208,13 +215,16 @@ def get_git_context() -> str:
 
 
 def build_system_prompt() -> str:
-    """Build the full system prompt from embedded template + dynamic context."""
+    """
+    根据嵌入式模板和动态上下文构建完整的系统提示
+    Build the full system prompt from embedded template + dynamic context."""
     from datetime import date
     today = date.today().isoformat()
     plat = f"{platform.system()} {platform.machine()}"
     shell = (os.environ.get("ComSpec") or "cmd.exe") if sys.platform == "win32" else os.environ.get("SHELL", "/bin/sh")
     git_context = get_git_context()
     claude_md = load_claude_md()
+    # 系统提示词中涉及到cwd下面的memory信息时希望新的session可以接上当前项目之前积累的经验
     memory_section = build_memory_prompt_section()
     skills_section = build_skill_descriptions()
     agent_section = build_agent_descriptions()

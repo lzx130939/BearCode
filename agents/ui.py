@@ -27,20 +27,20 @@ def _safe_stdout_write(text: object) -> None:
     sys.stdout.flush()
 
 
-COOKIE_BEAR = r"""
-        _     _
-      _( )___( )_
-     /  o     o  \
-    |      ^      |
-    |   \_____/   |
-     \  .-.-.    /
-      '-.....---'
-"""
-
+# COOKIE_BEAR = r"""
+#         _     _
+#       _( )___( )_
+#      /  o     o  \
+#     |      ^      |
+#     |   \_____/   |
+#      \  .-.-.    /
+#       '-.....---'
+# """
+COOKIE_BEAR = r""""""
 
 def print_welcome() -> None:
-    title = Text("Bear Code", style="bold #f6c177")
-    subtitle = Text("Evolvable Coding Agent CLI", style="bold cyan")
+    title = Text("Agent", style="bold #f6c177")
+    subtitle = Text("Evolvable Agent CLI", style="bold cyan")
     cookie = Text(COOKIE_BEAR, style="bold #d19a66")
 
     commands = Table.grid(padding=(0, 2))
@@ -51,6 +51,7 @@ def print_welcome() -> None:
     commands.add_row("/skill-create", "create a reusable skill")
     commands.add_row("/skill-stats", "show skill evolution stats")
     commands.add_row("/memory", "list long-term memories")
+    commands.add_row("/session-detail [-d]", "statistics, checkpoints and memory (-d: full details)")
     commands.add_row("/compact", "compact current context")
     commands.add_row("exit", "quit the session")
 
@@ -64,7 +65,7 @@ def print_welcome() -> None:
     console.print()
     console.print(Panel(
         body,
-        title="[bold #f6c177] bear cookie ready [/bold #f6c177]",
+        title="[bold #f6c177] cookie ready [/bold #f6c177]",
         subtitle="[dim]Type your request below[/dim]",
         border_style="#d19a66",
         box=box.ROUNDED,
@@ -74,7 +75,7 @@ def print_welcome() -> None:
 
 
 def print_user_prompt() -> None:
-    console.print("\n[bold #f6c177]Bear[/bold #f6c177][bold cyan]Code[/bold cyan] [dim]❯[/dim] ", end="")
+    console.print("\n[bold cyan]Agent[/bold cyan] [dim]❯[/dim] ", end="")
 
 
 def print_assistant_text(text: str) -> None:
@@ -82,6 +83,7 @@ def print_assistant_text(text: str) -> None:
 
 
 def print_tool_call(name: str, inp: dict) -> None:
+    """根据工具名称，展示工具调用的名称、图标和输入参数的摘要信息"""
     icon = _get_tool_icon(name)
     summary = _get_tool_summary(name, inp)
     table = Table.grid(padding=(0, 1))
@@ -90,6 +92,8 @@ def print_tool_call(name: str, inp: dict) -> None:
     table.add_row("tool", f"{icon} {name}")
     if summary:
         table.add_row("input", _safe_text(summary))
+
+    console.print()
     console.print(Panel(
         table,
         title="[bold yellow]Tool Call[/bold yellow]",
@@ -180,6 +184,7 @@ def print_cost(input_tokens: int, output_tokens: int, input_price: float = 3, ou
     table.add_row("input", f"{input_tokens} tokens")
     table.add_row("output", f"{output_tokens} tokens")
     table.add_row("estimate", f"${total:.4f}")
+    console.print(_safe_text(f"\n"))
     console.print(Panel(table, title="Cost", border_style="cyan", box=box.ROUNDED))
 
 
@@ -209,7 +214,7 @@ def print_warning(msg: str) -> None:
 
 def print_goodbye() -> None:
     console.print(Panel(
-        Text("Bye. Bear cookie saved for next time.", style="bold #f6c177"),
+        Text("Bye. cookie saved for next time.", style="bold #f6c177"),
         border_style="#d19a66",
         box=box.ROUNDED,
         padding=(0, 1),
@@ -229,14 +234,20 @@ _spinner_stop = threading.Event()
 
 
 def start_spinner(label: str = "Thinking") -> None:
+    """开始执行spinner动画"""
+
     global _spinner_thread
     if _spinner_thread is not None:
         return
+    # Reset the internal flag to false.
+    # Subsequently, threads calling wait() will block until set() is called to
+    # set the internal flag to true again.
     _spinner_stop.clear()
 
     def _run() -> None:
         frame = 0
         _safe_stdout_write(f"\n  {SPINNER_FRAMES[0]} {label}...")
+        # 在_spinner_stop被设置之前，循环打印spinner动画
         while not _spinner_stop.is_set():
             time.sleep(0.08)
             frame = (frame + 1) % len(SPINNER_FRAMES)
@@ -290,6 +301,7 @@ def print_plan_approval_options() -> None:
 
 
 def print_sub_agent_start(agent_type: str, description: str) -> None:
+    """显示子代理启动信息，包括代理类型和描述"""
     console.print(Panel(
         _safe_text(description),
         title=f"[bold magenta]Sub-agent started: {agent_type}[/bold magenta]",

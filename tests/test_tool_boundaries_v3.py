@@ -5,10 +5,30 @@ from pathlib import Path
 import stat
 import tempfile
 import tracemalloc
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 from agents import tools
+
+
+class FileVersionTests(unittest.TestCase):
+    def test_windows_snapshots_match_when_ctime_semantics_differ(self):
+        common = dict(st_dev=1, st_ino=2, st_size=6, st_mtime_ns=300, st_birthtime_ns=100)
+        by_path = SimpleNamespace(**common, st_ctime_ns=100)
+        by_handle = SimpleNamespace(**common, st_ctime_ns=200)
+        with patch.object(tools.os, "name", "nt"):
+            self.assertEqual(tools.FileVersion.from_stat(by_path), tools.FileVersion.from_stat(by_handle))
+
+    def test_posix_change_time_and_legacy_windows_creation_time_are_retained(self):
+        common = dict(st_dev=1, st_ino=2, st_size=6, st_mtime_ns=300)
+        with patch.object(tools.os, "name", "posix"):
+            first = tools.FileVersion.from_stat(SimpleNamespace(**common, st_birthtime_ns=100, st_ctime_ns=200))
+            second = tools.FileVersion.from_stat(SimpleNamespace(**common, st_birthtime_ns=100, st_ctime_ns=201))
+            self.assertNotEqual(first, second)
+        with patch.object(tools.os, "name", "nt"):
+            legacy = tools.FileVersion.from_stat(SimpleNamespace(**common, st_ctime_ns=100))
+            self.assertEqual(legacy.changed_ns, 100)
 
 
 class ToolBoundaryTests(unittest.IsolatedAsyncioTestCase):
@@ -26,6 +46,50 @@ class ToolBoundaryTests(unittest.IsolatedAsyncioTestCase):
 
     def deny(self, name: str, pattern: str | None):
         self.rules["deny"].append({"tool": name, "pattern": pattern})
+
+    async def test_unchanged_existing_file_can_be_read_and_edited_repeatedly(self):
+        path = self.root / "existing.txt"
+        path.write_text("before")
+        # A pre-existing file's creation and change times need not coincide.
+        os.utime(path, ns=(1_600_000_000_000_000_000, 1_600_000_000_000_000_000))
+        state = {}
+        for _ in range(3):
+            result = await tools.execute_tool("read_file", {"file_path": str(path)}, state)
+            self.assertIn("1 | before", result)
+            self.assertEqual(state[str(path)], tools._file_version(path))
+        for old, new in (("before", "after"), ("after", "final")):
+            result = await tools.execute_tool("edit_file", {
+                "file_path": str(path), "old_string": old, "new_string": new,
+            }, state)
+            self.assertTrue(result.startswith("Successfully"), result)
+            self.assertEqual(state[str(path)], tools._file_version(path))
+        self.assertEqual(path.read_text(), "final")
+
+    async def test_handle_change_time_is_checked_even_when_normalized_version_matches(self):
+        path = self.root / "file.txt"
+        path.write_text("before")
+        snapshot = path.stat()
+        first = SimpleNamespace(st_ctime_ns=100)
+        second = SimpleNamespace(st_ctime_ns=200)
+        version = tools.FileVersion.from_stat(snapshot)
+        state = {}
+        with patch.object(tools.os, "fstat", side_effect=[first, second]), \
+             patch.object(tools.FileVersion, "from_stat", return_value=version):
+            result = await tools.execute_tool("read_file", {"file_path": str(path)}, state)
+        self.assertIn("file changed during the read", result)
+        self.assertEqual(state, {})
+
+    async def test_path_replacement_is_checked_even_when_the_open_handle_is_unchanged(self):
+        path = self.root / "file.txt"
+        path.write_text("before")
+        observed = tools._file_version(path)
+        replacement = tools.FileVersion(observed.device, observed.inode + 1, observed.size,
+                                        observed.modified_ns, observed.changed_ns)
+        state = {}
+        with patch.object(tools, "_file_version", return_value=replacement):
+            result = await tools.execute_tool("read_file", {"file_path": str(path)}, state)
+        self.assertIn("file changed during the read", result)
+        self.assertEqual(state, {})
 
     async def test_file_rules_match_relative_absolute_and_symlink_aliases(self):
         blocked = self.root / "blocked.txt"

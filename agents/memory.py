@@ -54,10 +54,11 @@ def _project_hash() -> str:
     return hashlib.sha256(str(Path.cwd()).encode()).hexdigest()[:16]
 
 
-def get_memory_dir() -> Path:
+def get_memory_dir(*, create: bool = True) -> Path:
     """返回当前项目的 memory 目录，不存在时自动创建。"""
     d = Path.home() / ".BearCode" / "projects" / _project_hash() / "memory"
-    d.mkdir(parents=True, exist_ok=True)
+    if create:
+        d.mkdir(parents=True, exist_ok=True)
     return d
 
 
@@ -70,23 +71,28 @@ def _get_index_path() -> Path:
 
 def _slugify(text: str) -> str:
     """把记忆名称转成适合文件名的短 slug。"""
+    # re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "_", text.lower())表示把非小写英文字母、数字、汉字之外的字符都替换为下划线"_"
+    # r"[^a-z0-9\u4e00-\u9fff]+"这串正则表示：非小写英文字母、数字、汉字之外的字符都替换为下划线
+    # re.sub(pattern,repl,str)表示str中符合pattern要求的正则表达式捕获结果都替换成str
     s = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "_", text.lower())
     s = s.strip("_")
     digest = hashlib.sha256(text.encode()).hexdigest()[:8]
+    # 本质就是提取前31个字符作为文件名的前缀，然后加上8位的哈希值作为后缀，保证文件名的唯一性和可读性。
     return f"{s[:31]}_{digest}" if s else digest
 
 
 
 
-def list_memories() -> list[MemoryEntry]:
+def list_memories(*, create_dir: bool = True) -> list[MemoryEntry]:
     """读取当前项目所有 memory 文件，并按修改时间倒序返回。"""
-    d = get_memory_dir()
+    d = get_memory_dir(create=create_dir)
     entries: list[tuple[float, MemoryEntry]] = []
     for f in sorted(d.glob("*.md")):
         # MEMORY.md 是索引，不是一条真实记忆。
         if f.name == "MEMORY.md":
             continue
         try:
+            # f.stat()获取该文件/目录的元数据（metadata）
             mtime = f.stat().st_mtime
             result = parse_frontmatter(f.read_text(encoding="utf-8"))
             meta = result.meta
@@ -127,8 +133,10 @@ def delete_memory(filename: str) -> bool:
     """按文件名删除 memory，删除成功后刷新索引。"""
     directory = get_memory_dir()
     filepath = (directory / filename).resolve()
+    # filename 的父目录地址必须是 memory 目录，且不能删除索引文件 MEMORY.md。
     if filepath.parent != directory.resolve() or filepath.name == "MEMORY.md":
         raise ValueError("memory filename must identify a single memory inside its directory")
+    # 必须锁到MEMORY.md，因为最后需要对MEMORY.md进行修改
     with state_lock(directory / "MEMORY.md"):
         if not filepath.exists():
             return False
@@ -141,6 +149,7 @@ def delete_memory(filename: str) -> bool:
 
 def _update_memory_index() -> None:
     """根据当前 memory 文件重新生成 MEMORY.md。"""
+    # 这个list_memories返回的是修改时间倒叙的记忆表
     memories = list_memories()
     lines = ["# Memory Index", ""]
     for m in memories:
@@ -149,7 +158,7 @@ def _update_memory_index() -> None:
 
 
 def load_memory_index() -> str:
-    """读取 MEMORY.md，并在注入 system prompt 前做长度保护。"""
+    """读取 MEMORY.md，并在注入 system prompt 前做长度保护,避免提示词过长."""
     index_path = _get_index_path()
     if not index_path.exists():
         return ""
@@ -167,6 +176,7 @@ def load_memory_index() -> str:
 class MemoryHeader:
     """轻量 memory 摘要，只包含召回筛选需要的元信息。"""
 
+    # 只包含了文件名/文件路径/修改事件/文件描述/内容类型
     __slots__ = ("filename", "file_path", "mtime_ms", "description", "type")
 
     def __init__(self, filename: str, file_path: str, mtime_ms: float,
@@ -180,13 +190,15 @@ class MemoryHeader:
 
 MAX_MEMORY_FILES = 200                    # 参与召回筛选的最多 memory 文件数。
 MAX_MEMORY_HEADER_BYTES = 16 * 1024       # 防止超长单行或缺失结束符导致无限读取。
-MAX_MEMORY_HEADER_LINES = 30
+MAX_MEMORY_HEADER_LINES = 30              # 单个 memory 文件头部最多读取的行数。
 MAX_MEMORY_BYTES_PER_FILE = 4096          # 单个 memory 注入前的最大字节数。
 MAX_SESSION_MEMORY_BYTES = 60 * 1024      # 单个会话最多注入的 memory 总量。
 
 
 def _read_memory_header(path: Path) -> str:
-    """Read only a bounded frontmatter prefix, stopping at its closing delimiter."""
+    """
+    只尝试阅读当前Path路径下的memory文件下面的前面有限的frontmatter前缀，直到遇到结束分隔符为止。
+    Read only a bounded frontmatter prefix, stopping at its closing delimiter."""
     lines: list[bytes] = []
     remaining = MAX_MEMORY_HEADER_BYTES
     with path.open("rb") as stream:
@@ -195,17 +207,24 @@ def _read_memory_header(path: Path) -> str:
             if not line:
                 break
             lines.append(line)
+            # 时刻更新剩余可读取额度
             remaining -= len(line)
+            # 文件第一行必须是"---"
+            # 文件后续督导"---"表示已经到header的结尾了,因此需要停止读取
             if (index == 0 and line.strip() != b"---") or (index > 0 and line.strip() == b"---"):
                 break
             if not remaining:
                 break
     # A prefix may end inside a UTF-8 character; invalid interior bytes still fail.
+    # 前缀可能截断在 UTF-8 字符中间；但中间的非法字节仍会报错
+    # 因此final=remaining > 0表示了如果是False,decode就会容忍因为remaining的问题导致的多字节字符被中间截断的问题而导致的报错
     return codecs.getincrementaldecoder("utf-8")().decode(b"".join(lines), final=remaining > 0)
 
 
 def _read_memory_content(path: Path) -> str:
-    """Read at most the injection budget plus one byte to detect truncation."""
+    """
+    从这个Path下面读取memory文件中的内容(尽可能都读取),并且在读取时限制了最大读取的字节数，防止过大的文件导致内存占用过高。
+    Read at most the injection budget plus one byte to detect truncation."""
     with path.open("rb") as stream:
         raw = stream.read(MAX_MEMORY_BYTES_PER_FILE + 1)
     return codecs.getincrementaldecoder("utf-8")().decode(
@@ -213,23 +232,28 @@ def _read_memory_content(path: Path) -> str:
 
 
 def scan_memory_headers() -> list[MemoryHeader]:
-    """快速扫描 memory 文件头，不读取完整正文，用于低成本召回筛选。"""
+    """快速扫描 memory 文件头，不读取完整正文，用于低成本召回筛选。
+    这里不是扫描索引文件,而是每一个具体的文件"""
     d = get_memory_dir()
     files: list[tuple[float, Path]] = []
     for f in d.glob("*.md"):
         if f.name == "MEMORY.md":
             continue
         try:
+            # f.stat().st_mtime获取文件的最后修改时间,并把mtime和文件路径组成一个元组，添加到files列表中
             files.append((f.stat().st_mtime, f))
         except OSError:
             _logger.warning("Skipping unavailable memory %s", f, exc_info=True)
+    # 按修改时间倒序排列，最近修改的记忆排在前面，方便召回筛选。
     files.sort(key=lambda item: item[0], reverse=True)
     headers: list[MemoryHeader] = []
     for mtime, f in files:
         try:
+            # 读取header信息,并对header信息进行解析,返回一个FrontmatterResult对象,其中包含了meta和body两个属性
             result = parse_frontmatter(_read_memory_header(f))
             meta = result.meta
             t = meta.get("type")
+            # 将此memory下面的header信息封装成MemoryHeader对象,并添加到headers列表中
             headers.append(MemoryHeader(
                 filename=f.name,
                 file_path=str(f),
@@ -246,7 +270,8 @@ def scan_memory_headers() -> list[MemoryHeader]:
 
 
 def format_memory_manifest(headers: list[MemoryHeader]) -> str:
-    """把 memory 摘要列表格式化成给 side query 阅读的 manifest。"""
+    """把 memory 摘要列表格式化成给 side query 阅读的 manifest。
+    主要就是根据header这个列表中提供的基本信息进行一个补充格式化"""
     lines = []
     for h in headers:
         tag = f"[{h.type}] " if h.type else ""
@@ -271,7 +296,8 @@ def memory_age(mtime_ms: float) -> str:
 
 
 def memory_freshness_warning(mtime_ms: float) -> str:
-    """旧记忆可能过期，注入时提醒模型先核对当前代码。"""
+    """旧记忆可能过期，注入时提醒模型先核对当前代码。
+    这个操作主要是为了避免旧的记忆可能事件太久而导致可能是"变质"的。"""
     days = max(0, int((time.time() * 1000 - mtime_ms) / 86_400_000))
     if days <= 1:
         return ""
@@ -280,7 +306,7 @@ def memory_freshness_warning(mtime_ms: float) -> str:
             "Verify against current code before asserting as fact.")
 
 
-
+# 该提示词主要用于根据提供的用户查询和可用的记忆文件列表，选择对 AI 编程助手处理用户查询有用的记忆。模型需要返回一个 JSON 对象，其中包含一个 "selected_memories" 数组，数组中列出最多 5 个对查询明确有帮助的记忆文件名。
 SELECT_MEMORIES_PROMPT = """You are selecting memories that will be useful to an AI coding assistant as it processes a user's query. You will be given the user's query and a list of available memory files with their filenames and descriptions.
 
 Return a JSON object with a "selected_memories" array of filenames for the memories that will clearly be useful (up to 5). Only include memories that you are certain will be helpful based on their name and description.
@@ -289,8 +315,9 @@ Return a JSON object with a "selected_memories" array of filenames for the memor
 
 
 class RelevantMemory:
-    """被召回并准备注入对话的完整 memory。"""
+    """被召回并准备注入对话的完整 memory对象。"""
 
+    # 被召回的memory对象主要包括了文件路径,文件内容,修改时间和提示头信息
     __slots__ = ("path", "content", "mtime_ms", "header")
 
     def __init__(self, path: str, content: str, mtime_ms: float, header: str):
@@ -324,15 +351,17 @@ async def select_relevant_memories(
     # 扫描所有 memory 文件头信息。
     headers = scan_memory_headers()
 
+    # 如果没有 memory 文件，直接返回空列表。
     if not headers:
         return []
 
     # 排除已经展示过的 memory。
+    # 通过检查每个 memory 的 file_path 是否在 already_surfaced 集合中来实现。
     candidates = [h for h in headers if h.file_path not in already_surfaced]
     if not candidates:
         return []
 
-    # manifest 是给 side query 看的候选摘要列表。
+    # 对筛选后的candidate进行一个格式化,使其方便后续提供给side query
     manifest = format_memory_manifest(candidates)
 
     # 调用 side_query，让模型根据文件名和描述挑选相关 memory。
@@ -343,12 +372,14 @@ async def select_relevant_memories(
         )
 
         # side query 可能返回解释文本，这里只提取其中的 JSON 对象。
+        # 匹配从第一个 { 到最后一个 } 之间的所有内容。
         match = re.search(r"\{[\s\S]*\}", text)
         if not match:
             return []
 
         # 解析 JSON，拿到被选中的 memory 文件名。
         parsed = json.loads(match.group(0))
+        # 提取selected_memories是通过prompt跟llm提出的要求
         selected_filenames = set(parsed.get("selected_memories", []))
         # 根据文件名筛选候选 memory，最多取 5 个。
         selected = [h for h in candidates if h.filename in selected_filenames][:5]
@@ -356,6 +387,7 @@ async def select_relevant_memories(
         result: list[RelevantMemory] = []
         for h in selected:
             try:
+                # 直接对memory文件进行整个读取,但限制了最大字数
                 content = _read_memory_content(Path(h.file_path))
             except (OSError, UnicodeError):
                 # Files may disappear or change while the side query is running.
@@ -363,6 +395,7 @@ async def select_relevant_memories(
                 continue
 
             # 根据 memory 修改时间生成提示头；旧记忆会附带 freshness warning。
+            # 以1天作为默认区分标准
             freshness = memory_freshness_warning(h.mtime_ms)
             header_text = (
                 f"{freshness}\n\nMemory: {h.file_path}:" if freshness
@@ -405,11 +438,12 @@ def start_memory_prefetch(
     """
     在主模型回复前，提前异步启动 memory 召回。
 
-    返回值不是 memory 内容，而是 MemoryPrefetch 句柄。
+    返回值不是 memory 内容，而是 MemoryPrefetch 句柄,里面包括了调度任务及其相关的控制信息。
     Agent 主循环后续会检查任务是否完成，完成后再把 memory 注入当前消息。
     """
 
     # 只有多词输入才触发 memory 预取，避免每个短命令都消耗一次 side query。
+    # 只有当前的query中间没有空格且汉字数量小于6时，才会返回None，不触发memory预取
     if not re.search(r"\s", query.strip()) and len(re.findall(r"[\u4e00-\u9fff]", query)) < 6:
         return None
 
@@ -419,11 +453,13 @@ def start_memory_prefetch(
 
     # memory 目录里必须真的有 memory 文件。
     d = get_memory_dir()
+    # 只有在d下面至少存在一个非MEMORY.md的.md文件时，才会触发memory预取。即除了记忆索引文件外还有其他的memory文件存在，才会触发memory预取
     has_memories = any(f.suffix == ".md" and f.name != "MEMORY.md" for f in d.iterdir())
     if not has_memories:
         return None
 
     # 条件通过后创建异步任务，让召回和主模型请求并行推进。
+    # 创建一个任务注册到事件循环中，用于查找相关的记忆
     task = asyncio.create_task(
         select_relevant_memories(query, side_query, already_surfaced)
     )
@@ -431,7 +467,8 @@ def start_memory_prefetch(
 
 
 def format_memories_for_injection(memories: list[RelevantMemory]) -> str:
-    """把召回的 memory 包成 system-reminder，便于注入到用户消息。"""
+    """把召回的 memory 包成 system-reminder，便于注入到用户消息。
+    本质就是用<system-reminder>标签把每个memory的header和content包起来,并且在每个memory之间用两个换行符分隔开"""
     parts = []
     for m in memories:
         parts.append(f"<system-reminder>\n{m.header}\n\n{m.content}\n</system-reminder>")
@@ -448,7 +485,12 @@ def build_memory_prompt_section() -> str:
     - 如何通过 write_file 保存 memory；
     - 哪些内容不应该保存；
     - 当前 MEMORY.md 索引里有哪些记忆。
+
+    MEMORY.md 的索引文件一般会记录下方其他记忆的关键信息，结构可能是：
+    # Memory Index
+    **[{m.name}]({m.filename})** ({m.type}) — {m.description}
     """
+    # 加载 MEMORY.md 索引（已经做了长度保护）
     index = load_memory_index()
     memory_dir = str(get_memory_dir())
 

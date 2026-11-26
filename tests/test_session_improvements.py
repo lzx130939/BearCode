@@ -81,10 +81,20 @@ class SessionImprovementTests(unittest.TestCase):
             view.ensure_agent()
             view.agent._openai_messages = [{"role": "system", "content": "test"},
                 {"role": "user", "content": "<session-folded-memory>runtime summary</session-folded-memory>"}]
+            recalled = str(self.root / "memory" / "preference.md")
+            view.agent._already_surfaced_memories = {recalled}
+            view.agent._session_memory_bytes = 721
             view.agent._auto_save(strict=True)
             data = session.load_session(view.id)
             self.assertEqual(data["metadata"]["title"], view.title)
-            self.assertEqual(Conversation(self.app, view.id, data).title, view.title)
+            resumed_view = Conversation(self.app, view.id, data)
+            self.assertEqual(resumed_view.title, view.title)
+            resumed_view.ensure_agent()
+            try:
+                self.assertEqual(resumed_view.agent._already_surfaced_memories, {recalled})
+                self.assertEqual(resumed_view.agent._session_memory_bytes, 721)
+            finally:
+                await resumed_view.agent.aclose()
             restored = Agent(**self.app.options)
             try:
                 restored.restore_session(data)

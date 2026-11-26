@@ -13,11 +13,13 @@ MAX_INLINE_RESULT_BYTES = 30 * 1024
 
 
 def _matches_artifact(path: Path, encoded: bytes) -> bool:
+    """判断当前路径下文件是否存在，并且内容是否与encoded一致"""
     if path.is_symlink():
         return False
     try:
         digest = hashlib.sha256()
         with path.open("rb") as stream:
+            # 每次读取65536字节，直到读取到空子节
             for chunk in iter(lambda: stream.read(65536), b""):
                 digest.update(chunk)
         return digest.digest() == hashlib.sha256(encoded).digest()
@@ -26,14 +28,25 @@ def _matches_artifact(path: Path, encoded: bytes) -> bool:
 
 
 def persist_tool_result(tool_name: str, result: str, *, reuse_existing: bool = False) -> dict[str, str]:
+    """persist_tool_result 是一个大型工具结果落盘（spill-to-disk）函数
+
+    参数：
+    - tool_name: 工具名称，用于生成文件名
+    - result: 工具输出的结果字符串
+    - reuse_existing: 是否重入已有的结果文件，如果为True且已有相同内容的文件存在，则不会重新写入
+
+    返回结果：{"result": result}/{"result": summary, "result_file": str(path)}"""
     encoded = result.encode("utf-8", errors="replace")
     result = encoded.decode("utf-8")
     size = len(encoded)
+    # 如果长度小，直接inline返回在messages中，反之则需要summery提取一下先
     if size <= MAX_INLINE_RESULT_BYTES:
         return {"result": result}
 
     directory = Path.home() / ".bear-code" / "tool-results"
+    # 把非数字字母的符号更新为`_`
     safe_name = re.sub(r"[^A-Za-z0-9_-]", "_", tool_name)[:80]
+    # 不重入，就直接生成一个新的uuid作为identity避免id重复
     identity = hashlib.sha256(encoded).hexdigest() if reuse_existing else uuid.uuid4().hex
     path = directory / f"{identity}-{safe_name}.txt"
     # Publish the complete artifact durably before its checkpoint refers to it.

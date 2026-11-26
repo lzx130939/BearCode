@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from agents import main as cli
+from agents import session
 from agents.config import load_env_file, resolve_agent_options, resolve_api_config
 from agents.web import WebApp
 
@@ -117,6 +118,68 @@ class ConfigurationTests(unittest.TestCase):
                 load_env_file()
                 self.assertEqual(os.environ["MODEL"], "process-model")
                 self.assertEqual(os.environ["APIKEY"], "file-key")
+
+
+class CliResumeTests(unittest.TestCase):
+    def test_resume_keeps_selected_session_id_and_saves_to_original_file(self):
+        agent_class = cli.Agent
+
+        def make_agent(**options):
+            options.update(custom_system_prompt="offline test", enable_mcp=False,
+                           enable_memory_prefetch=False, enable_online_evolution=False)
+            return agent_class(**options)
+
+        for protocol in ("openai", "anthropic"):
+            for resume_args in (["--resume-id", "saved-session"], ["--resume"]):
+                with self.subTest(protocol=protocol, arguments=resume_args), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    messages_key = "openaiMessages" if protocol == "openai" else "anthropicMessages"
+                    saved = {
+                        "metadata": {"id": "saved-session", "cwd": str(Path.cwd()), "apiProtocol": protocol},
+                        messages_key: [{"role": "user", "content": "original task"},
+                                       {"role": "assistant", "content": "saved response"}],
+                        "runtimeState": {"conversationId": "original-conversation",
+                                         "alreadySurfacedMemories": [str(root / "memory" / "preference.md")],
+                                         "sessionMemoryBytes": 721},
+                    }
+
+                    async def continue_repl(agent):
+                        try:
+                            self.assertEqual(agent.session_id, "saved-session")
+                            self.assertEqual(agent._conversation_id, "original-conversation")
+                            self.assertEqual(agent._already_surfaced_memories,
+                                             set(saved["runtimeState"]["alreadySurfacedMemories"]))
+                            self.assertEqual(agent._session_memory_bytes, 721)
+                            messages = agent._openai_messages if agent.use_openai else agent._anthropic_messages
+                            self.assertEqual(messages[0]["content"], "original task")
+                            messages.append({"role": "user", "content": "continued task"})
+                            agent._auto_save(strict=True)
+                        finally:
+                            await agent.aclose()
+
+                    api = "https://example.test/v1" if protocol == "openai" else "https://example.test/anthropic"
+                    with patch.object(session, "SESSION_DIR", root / "sessions"), \
+                         patch("pathlib.Path.home", return_value=root), \
+                         patch("agents.skill_evolution.get_evolution_dir", return_value=root / "evolution"), \
+                         patch.dict(os.environ, {"APIKEY": "offline-key", "API": api}, clear=True), \
+                         patch("sys.argv", ["bear-code", *resume_args]), \
+                         patch("agents.main._load_env_file"), patch("agents.main.print_info"), \
+                         patch("agents.agent.print_info"), \
+                         patch("agents.agent.openai.AsyncOpenAI", return_value=AsyncMock()), \
+                         patch("agents.agent.anthropic.AsyncAnthropic", return_value=AsyncMock()), \
+                         patch("agents.main.Agent", side_effect=make_agent), \
+                         patch("agents.main.run_repl", side_effect=continue_repl):
+                        session.save_session("saved-session", saved)
+                        cli.main()
+                        restored = session.load_session("saved-session")
+                        self.assertEqual(restored["metadata"]["id"], "saved-session")
+                        self.assertEqual(restored[messages_key][-1]["content"], "continued task")
+                        self.assertEqual(restored["runtimeState"]["conversationId"], "original-conversation")
+                        self.assertEqual(restored["runtimeState"]["alreadySurfacedMemories"],
+                                         saved["runtimeState"]["alreadySurfacedMemories"])
+                        self.assertEqual(restored["runtimeState"]["sessionMemoryBytes"], 721)
+                        self.assertEqual([path.name for path in (root / "sessions").glob("*.json")],
+                                         ["saved-session.json"])
 
 
 if __name__ == "__main__":

@@ -13,6 +13,7 @@ class ToolResult(str):
 
 
 def tool_failed(name: str, result: str) -> bool:
+    """根据name中的failed字段和result的内容判断当前工具是否失败，返回一个bool值"""
     if isinstance(getattr(result, "failed", None), bool):
         return result.failed
     text = result.lstrip()

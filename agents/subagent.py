@@ -96,6 +96,7 @@ def _discover_custom_agents() -> dict[str, dict]:
                 signature.append((str(path.resolve()), info.st_mtime_ns, info.st_size, info.st_ino))
             except OSError:
                 continue
+    # 类似rule和skill的加载，都需要先确认签名，读取cache。
     signature = (str(Path.cwd().resolve()), tuple(signature))
     if _cached_custom_agents is not None and signature == _cached_agent_signature:
         return _cached_custom_agents
@@ -142,16 +143,20 @@ def _load_agents_from_dir(directory: Path, agents: dict[str, dict]) -> None:
 
 def get_sub_agent_config(agent_type: str) -> dict:
     """根据代理类型生成 Agent 运行时需要的 system_prompt 和 tools 配置。"""
+    # 获取自定义代理配置，前面是自定义配置的分析
     custom = _discover_custom_agents().get(agent_type)
     if custom:
+        # 如果存在则使用自定义的 system_prompt 和工具白名单。
         if custom["allowed_tools"] is not None:
             # 自定义代理显式声明工具白名单时，只授予白名单中的工具。
+            # 注意：不允许自定义代理再调用 agent 工具，避免递归创建子代理导致控制流复杂化。
             tools = [t for t in tool_definitions if t["name"] in custom["allowed_tools"] and t["name"] != "agent"]
         else:
             # 不允许子代理再调用 agent 工具，避免递归创建子代理导致控制流复杂化。
             tools = [t for t in tool_definitions if t["name"] != "agent"]
         return {"system_prompt": custom["system_prompt"], "tools": tools}
 
+    # 这里是内置Agent的配置获取
     # 内置 explore / plan 使用相同的只读工具集合。
     read_only = [t for t in tool_definitions if t["name"] in READ_ONLY_TOOLS]
 
@@ -179,7 +184,7 @@ def get_available_agent_types() -> list[dict[str, str]]:
 
 
 def build_agent_descriptions() -> str:
-    """把自定义代理类型格式化成 Markdown，供主 Agent 注入到系统提示词中。"""
+    """把自定义代理类型格式化成 Markdown，供主 Agent 注入到系统提示词中。剔除原生存在的explore/plan/general类型。"""
     types = get_available_agent_types()
     if len(types) <= 3:
         return ""  # Only built-in types, already in system prompt

@@ -12,9 +12,12 @@ from .skill_evolution import get_evolution_dir
 
 
 def _referenced_results(directory: Path) -> set[str] | None:
-    """Scan all projects' sessions; an unreadable session makes deletion unsafe."""
+    """
+    _referenced_results是从.bear/sessions目录下的所有会话中的所有json文件中提取出所有被引用的工具结果文件名,格式<roots>/<filename>.txt，取<filename>.txt，并返回一个集合
+    Scan all projects' sessions; an unreadable session makes deletion unsafe."""
     from .session import SESSION_DIR
     roots = {str(directory), str(directory.resolve())}
+    # 先设置正则表达式的规则
     pattern = re.compile("(?:" + "|".join(re.escape(root) for root in roots) + r")[/\\]([A-Za-z0-9_.-]+\.txt)")
     referenced = set()
     try:
@@ -31,6 +34,7 @@ def _referenced_results(directory: Path) -> set[str] | None:
                 elif isinstance(item, list):
                     pending.extend(item)
                 elif isinstance(item, str):
+                    # 在这里在item中选取通过正则表达式规律后的所有结果
                     referenced.update(pattern.findall(item))
     except (OSError, ValueError):
         logging.warning("Skipping tool-result cleanup: session references could not be verified", exc_info=True)
@@ -39,6 +43,12 @@ def _referenced_results(directory: Path) -> set[str] | None:
 
 
 def cleanup_candidates(days: int = 30) -> list[Path]:
+    """
+    cleanup_candidates 逻辑
+    1、先通过_referenced_results返回.bear/tool-results目录下所有被引用的工具结果文件名到referenced,格式<filename>.txt
+    2、然后遍历所有目录 ~/.bear-code/tool-results/*.txt，查询不在引用信息（referenced）内+ 不是 symlink + 小于cutoff的Path，并append到paths中
+    3、然后遍历所有目录 ~/.bear-code/tool-results/online-eval/runs/*/*中，查询不在冠军注册表下的run_id（champions.json → protected）+ 是目录结构 + 不是 symlink + 路径包含关系 + 小于cutoff的Path，并append到paths中
+    """
     if days < 1:
         raise ValueError("retention days must be positive")
     cutoff = time.time() - days * 86400
@@ -61,6 +71,10 @@ def cleanup_candidates(days: int = 30) -> list[Path]:
 
 
 def cleanup_state(days: int = 30, *, apply: bool = False, expected_paths: list[str] | None = None) -> dict:
+    """
+    cleanup_state的本质是找到满足delay时间范围外和其他额外条件的~/.bear-code/tool-results/*.txt（一次工具调用的输出缓存文件）
+    和~/.bear-code/tool-results/online-eval/runs/*/*目录下的文件（一次评测 run 的产物目录）的文件
+    然后再跟expected_paths做对比，如果不一致就报错，最后根据apply参数决定是否真的删除这些文件"""
     paths = cleanup_candidates(days)
     if apply:
         if expected_paths is not None and set(map(str, paths)) != set(expected_paths):
