@@ -161,8 +161,23 @@ class WebShutdownTests(unittest.TestCase):
         self.app.close()
         self.app.close()
 
+    def test_loopback_service_starts_and_serves_requests_without_reverse_dns(self):
+        with patch("socket.getfqdn", side_effect=AssertionError("Reverse DNS must not be required")) as lookup:
+            server, worker = self.start_server()
+            self.assertEqual(server.server_name, "127.0.0.1")
+            self.assertGreater(server.server_port, 0)
+            response = self.connect(server, "/api/config")
+            self.assertTrue(response.read())
+            response.close()
+            server.server_close()
+            self.assertFalse(worker.is_alive())
+            lookup.assert_not_called()
+
     def test_real_process_exits_cleanly_with_open_streams_and_cp1252_stderr(self):
         script = textwrap.dedent('''
+            import faulthandler
+            # Startup/import costs are separate from the shutdown deadline.
+            faulthandler.dump_traceback_later(45, exit=True)
             import http.client
             from pathlib import Path
             import tempfile
@@ -170,6 +185,7 @@ class WebShutdownTests(unittest.TestCase):
             from unittest.mock import patch
             from agents import session
             from agents.web import WebApp, WebServer
+            print('imports ready', flush=True)
 
             with tempfile.TemporaryDirectory() as directory, patch.object(session, 'SESSION_DIR', Path(directory)):
                 app = WebApp(options={'api_key': 'offline', 'custom_system_prompt': 'test'})
@@ -192,11 +208,14 @@ class WebShutdownTests(unittest.TestCase):
                             if line == b'\\n':
                                 break
                     handlers = list(server._threads)
+                    print('streams ready', flush=True)
+                    faulthandler.cancel_dump_traceback_later()
+                    faulthandler.dump_traceback_later(10, exit=True)
                     app.close()
                     assert not worker.is_alive()
                     assert all(not handler.is_alive() for handler in handlers)
                     assert all(view.stream_clients == 0 for view in app.conversations.values())
-                    print('clean shutdown')
+                    print('clean shutdown', flush=True)
                 finally:
                     for response in responses:
                         response.close()
@@ -204,14 +223,22 @@ class WebShutdownTests(unittest.TestCase):
                         client.close()
                     server.server_close()
                     app.close()
+                    faulthandler.cancel_dump_traceback_later()
         ''')
         environment = {**os.environ, "PYTHONUTF8": "0", "PYTHONIOENCODING": "cp1252"}
         for attempt in range(3):
             with self.subTest(attempt=attempt):
-                result = subprocess.run([sys.executable, "-B", "-X", "utf8=0", "-c", script],
-                                        capture_output=True, timeout=20, env=environment)
+                try:
+                    result = subprocess.run([sys.executable, "-B", "-X", "utf8=0", "-c", script],
+                                            capture_output=True, timeout=60, env=environment)
+                except subprocess.TimeoutExpired as exc:
+                    output = (exc.stdout or b"").decode("cp1252", errors="replace")
+                    errors = (exc.stderr or b"").decode("cp1252", errors="replace")
+                    self.fail(f"Web subprocess timed out. Startup/shutdown progress:\n{output}\n{errors}")
                 errors = result.stderr.decode("cp1252", errors="replace")
-                self.assertEqual(result.returncode, 0, errors)
+                progress = result.stdout.decode("cp1252", errors="replace")
+                self.assertEqual(result.returncode, 0, f"Startup/shutdown progress:\n{progress}\n{errors}")
+                self.assertIn(b"streams ready", result.stdout)
                 self.assertIn(b"clean shutdown", result.stdout)
                 self.assertNotIn("Traceback", errors)
                 self.assertNotIn("Fatal Python error", errors)

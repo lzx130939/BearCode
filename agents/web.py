@@ -16,6 +16,7 @@ import re
 from pathlib import Path
 import secrets
 import socket
+from socketserver import TCPServer
 import threading
 import time
 from urllib.parse import parse_qs, urlsplit
@@ -670,6 +671,12 @@ class WebServer(ThreadingHTTPServer):
         self._serving_thread = None
         super().__init__(address, WebHandler)
         app._servers.add(self)
+
+    def server_bind(self):
+        # HTTPServer resolves a fully-qualified hostname after binding. This
+        # loopback-only service needs no reverse DNS, which can stall on macOS.
+        TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
     def serve_forever(self, poll_interval=0.5):
         with self._requests_lock:
